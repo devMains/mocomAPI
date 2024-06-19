@@ -104,7 +104,8 @@ true or false
 
 */
 app.post('/api/login', async (req, res) => {
-    const { id, pw } = req.body;
+    console.log(req.query);
+    const loginData = req.query;
 
     try {
         var assignmentData = {}; // 최종에 반환할 JSON
@@ -114,8 +115,8 @@ app.post('/api/login', async (req, res) => {
         const page = await browser.newPage();
         await page.goto("https://eclass.hanbat.ac.kr");
         await page.goto("https://eclass.hanbat.ac.kr/xn-sso/login.php?auto_login=&sso_only=&cvs_lgn=&site=&return_url=https%3A%2F%2Feclass.hanbat.ac.kr%2Fxn-sso%2Fgw-cb.php%3Ffrom%3D%26site%3D%26login_type%3Dstandalone%26return_url%3D");
-        await page.type('form[name="form1"] input[name="login_user_id"]', id); // id 폼
-        await page.type('form[name="form1"] input[name="login_user_password"]', pw); // pw 폼
+        await page.type('form[name="form1"] input[name="login_user_id"]', loginData.id); // id 폼
+        await page.type('form[name="form1"] input[name="login_user_password"]', loginData.pw); // pw 폼
         await page.evaluate(() => {
             OnLogon(); // 로그인 함수 실행
         });
@@ -142,24 +143,26 @@ app.post('/api/login', async (req, res) => {
         for (var i = 0; i < assignmentsLink.length; i++) {
             await page.goto('https://lms.hanbat.ac.kr' + assignmentsLink[i]); // 위에서 추출한 과목 과제 링크 접속
             
+            console.log(assignmentsLink[i])
+
             const content = await page.content(); // html 불러오기
-            await new Promise(resolve => setTimeout(resolve, 3000)); // 페이지 로딩을 위한 4초 대기
+            await new Promise(resolve => setTimeout(resolve, 4000)); // 페이지 로딩을 위한 4초 대기
             const dom = new JSDOM(content); // DOM으로 HTML 분석
             const document = dom.window.document; // document 생성
 
             var title = document.getElementsByClassName("ellipsible"); // 과목명 HTML raw data
             var titles = Array.from(title)[1].textContent; // 과목명
-            var data = document.getElementsByClassName("ig-info"); // 과제 정보 HTML raw data
+            var data = document.getElementsByClassName("ig-title"); // 과제 정보 HTML raw data
             var date = document.getElementsByClassName("ig-details"); // 과제 마감일 HTML raw data
             var tmp = [];
 
             // /courses/숫자 사이트의 헤더 script 부분을 통해 과제 파악 해야함
             var assignData = document.getElementsByTagName("script");
             const assignJson = JSON.parse(assignData[3].textContent.split("ENV = ")[1].replace(";", ""));
-
             if (assignJson.notices.length == 0) {
+                console.log(titles);
                 for (let j = 0; j < data.length; j++) {
-                    var title = data[j].querySelector("a").textContent; // 과제명 추출
+                    var title = data[j].textContent; // 과제명 추출
                     title = title.trim(); // 공백 제거
                     var dates = date[j].getElementsByTagName("span"); // 날짜 추출
                     if (dates.length == 4) { // 마감일을 설정하지 않았을 경우 span의 개수가 4개
@@ -192,22 +195,20 @@ app.post('/api/login', async (req, res) => {
                     tmp.push({"title" : title, "date" : dates});
                 }
             }
-            if (assignJson.notices.length == 0 && tmp.length == 0) {
-                console.log(titles);
-                i--;
-                continue;
-            }
+            // if (assignJson.notices.length == 0 && tmp.length == 0) {
+            //     console.log(titles, Array.from(data));
+            //     i--;
+            //     continue;
+            // }
             if (tmp.length != 0)
                 assignmentData[titles] = tmp;
         }
 
-
-        await browser.close();
+        
     }
     catch (error) {
         console.log(error);
     }
-
     res.status(200).send(assignmentData);
 
 });
@@ -215,7 +216,9 @@ app.post('/api/login', async (req, res) => {
 
 // DB에 해당 번호가 있는지 확인하는 함수
 app.get("/api/check", (req, res) => {
-    const id = req.body.share_number;
+    console.log("get api check");
+    const id = req.query.share_number;
+    console.log(id);
     const query = `select EXISTS (select * from share_db where share_number=${id} limit 1) as success;`
     share_db.query(query, (err, result) => {
         if (err) {
@@ -230,7 +233,7 @@ app.get("/api/check", (req, res) => {
 });
 
 app.get("/api/share", async (req, res) => {
-    const id = req.body.share_number;
+    const id = req.query.share_number;
     const query = `SELECT * FROM share_db WHERE share_number = ${id}`;
 
     const shareResult = await new Promise((resolve, reject) => {
@@ -247,23 +250,39 @@ app.get("/api/share", async (req, res) => {
     if (Object.keys(shareResult).length === 0) {
         res.send(false).status(200);
     } else {
-        res.send(shareResult[0]).status(200);
+        res.send(shareResult).status(200);
     }
 });
 
 app.post("/api/share", (req, res) => {
-    const data = req.body;
+    const data = req.query;
     const query = `INSERT INTO share_db (title, ddate, tesk, share_number) VALUES ("${data.title}", "${data.ddate}", "${data.tesk}", ${data.share_number});`;
-    share_db.query(query, (err, result) => {
-        if (err) {
-            console.log(err);
-            res.send(false).status(500);
-            return;
-        } else {
-            res.send(true).status(200);
-            return;
+    share_db.beginTransaction((err) => {
+        if (err)
+            console.log("transaction err : " + err);
+        else {
+            share_db.query(query, (err, result) => {
+                if (err) {
+                    console.log(err);
+                    res.send(false).status(500);
+                    return;
+                } else {
+                    share_db.commit((err) => {
+                        if (err) {
+                            console.log("commit err : " + err);
+                            share_db.rollback(()=> {
+                                console.log("rollback");
+                                res.send("transaction failed").status(500);
+                            })
+                        }
+                    })
+                    res.send(true).status(200);
+                    return;
+                }
+            })
         }
     })
+    
 })
 
 app.listen(port, () => {
